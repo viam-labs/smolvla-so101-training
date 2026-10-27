@@ -59,6 +59,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--tabular_data_file", required=True)
     p.add_argument("--sequences_file", required=True)
     p.add_argument("--model_output_directory", required=True)
+    # `viam training-script test-local` passes this for image datasets; a
+    # sequence dataset has no dataset.jsonl, so it is accepted and ignored.
+    p.add_argument("--dataset_file", default="", help=argparse.SUPPRESS)
     # Ours.
     p.add_argument("--stage", choices=("prepare", "train", "probe_io"), default="train",
                    help="probe_io: time image-copy methods on a sample, then exit")
@@ -72,7 +75,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--clamp_joint", default="",
                    help="INDEX:MAX_DEGREES, e.g. 3:95; empty for no clamp")
     p.add_argument("--tolerance_s", type=float, default=0.05)
-    p.add_argument("--task_prefix", default="cmd:")
+    p.add_argument("--task_prefix", default="cmd: task:",
+                   help="space-separated tag prefixes that mark the instruction, tried in order; "
+                        "task: is what the capture-control web app writes")
     # Training defaults follow viam-sequence-to-lerobot's scripts/train_job.toml
     # (smolvla-box-bot): batch 64, AMP, 12 loader workers, 30 actions per call.
     p.add_argument("--steps", type=int, default=3750)
@@ -344,6 +349,39 @@ def probe_gpu() -> dict:
 
 # --- Lay out the export, copying images locally ------------------------------
 
+def task_prefixes(args) -> list[str]:
+    prefixes = args.task_prefix.split()
+    if not prefixes:
+        raise SystemExit("--task_prefix needs at least one prefix")
+    return prefixes
+
+
+def instruction_tags(tags, prefixes: list[str]) -> list[str]:
+    """Give a sequence the instruction under the first prefix, from the first prefix it has.
+
+    The converter reads one prefix. A dataset can mix sequences tagged by hand
+    (`cmd:`) with ones from the capture-control web app (`task:`), so each
+    sequence's instruction is copied to the first prefix. Tags are only added.
+    """
+    tags = list(tags)
+    first = prefixes[0]
+    if any(t.startswith(first) and t[len(first):].strip() for t in tags):
+        return tags
+    for prefix in prefixes[1:]:
+        values = [t[len(prefix):].strip() for t in tags if t.startswith(prefix) and t[len(prefix):].strip()]
+        if values:
+            return tags + [first + v for v in values]
+    return tags
+
+
+def write_sequences(src, dst: Path, prefixes: list[str], progress: Progress) -> None:
+    sequences = pd.read_parquet(src)
+    tagged = [instruction_tags(tags, prefixes) for tags in sequences["tags"]]
+    progress.set(instruction_from_later_prefix=sum(len(new) > len(old) for new, old in zip(tagged, sequences["tags"])))
+    sequences["tags"] = tagged
+    sequences.to_parquet(dst, index=False)
+
+
 def layout_export(args, export_dir: Path, work: Path, progress: Progress) -> pd.DataFrame:
     """Write sequences.parquet and binary_data.parquet with local image paths.
 
@@ -391,7 +429,7 @@ def layout_export(args, export_dir: Path, work: Path, progress: Progress) -> pd.
             raise SystemExit(f"image files not found, e.g. {missing[0]} (set --binary_root)")
 
     binary.to_parquet(export_dir / "binary_data.parquet", index=False)
-    shutil.copy(args.sequences_file, export_dir / "sequences.parquet")
+    write_sequences(args.sequences_file, export_dir / "sequences.parquet", task_prefixes(args), progress)
     return binary
 
 
@@ -522,7 +560,7 @@ def convert(args, export_dir: Path, dataset_root: Path, repo_id: str, fps: int, 
         output_root=dataset_root,
         repo_id=repo_id,
         task=None,
-        task_prefix=args.task_prefix,
+        task_prefix=task_prefixes(args)[0],
         camera_components=tuple(args.cameras.split()),
         arm_component=args.arm,
         action_space="joints",

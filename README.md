@@ -19,8 +19,10 @@ The script takes a Viam **sequence dataset**: recordings made with
   `{"docommand_input": {"get": true}}`.
 - **Two cameras' `GetImages`**. By default they are named `overhead-camera`
   and `wrist-camera`.
-- **A `cmd:` tag** holding the instruction, for example
-  `cmd:push the mug to the blue square`.
+- **A tag holding the instruction**: `cmd:`, for example
+  `cmd:push the mug to the blue square`, or `task:`, which is what the
+  [capture-control web app](https://github.com/viam-labs/capture-control-webapp)
+  writes. A dataset can mix the two.
 
 Every sequence must be recorded at the same capture rate. The policy runs at
 that rate, so it is also the rate its controller needs to use.
@@ -37,7 +39,8 @@ that rate, so it is also the rate its controller needs to use.
 4. **Converts to a LeRobot dataset** with
    [`viam-sequence-to-lerobot`](https://github.com/viam-labs/viam-sequence-to-lerobot).
    The action is the next position, one episode is made per sequence, and the
-   instruction comes from the `cmd:` tag.
+   instruction comes from the `cmd:` tag, or the `task:` tag if there is no
+   `cmd:` one.
 5. **Checks the dataset**: state and action are six values, both cameras are
    present, and the frame rate and episode count are right.
 6. **Fine-tunes `lerobot/smolvla_base`** with `lerobot-train`. The job stops
@@ -57,7 +60,7 @@ training container. Built on `huggingface/lerobot-gpu`, it pins LeRobot to the
 commit that `viam-labs:vla` 0.2.1 loads checkpoints with.
 
 ```bash
-viam train submit custom from-registry --dataset-id=<dataset id> --org-id=<org id> --model-name=<model name> --model-version=<new version> --script-name=<script org id>:smolvla-so101 --version=0.6.1 --container-id=<container id> --args=steps=7500
+viam train submit custom from-registry --dataset-id=<dataset id> --org-id=<org id> --model-name=<model name> --model-version=<new version> --script-name=<script org id>:smolvla-so101 --version=0.6.2 --container-id=<container id> --args=steps=7500
 ```
 
 ```bash
@@ -84,7 +87,7 @@ so a value that holds a list uses `+` between its items.
 | `gripper` | `follower-gripper` | The gripper component; empty for no gripper |
 | `gripper_open`, `gripper_closed` | 100, 0 | The gripper's raw readings when open and closed |
 | `cameras` | `overhead-camera wrist-camera` | Camera names, separated by spaces. The first sets the frame clock |
-| `task_prefix` | `cmd:` | The tag prefix that marks the instruction |
+| `task_prefix` | `cmd: task:` | The tag prefixes that mark the instruction, separated by spaces and tried in order |
 | `clamp_joint` | none | `INDEX:MAX_DEGREES`, for example `3:95`, to clamp one joint |
 | `lerobot_args` | none | Any other `lerobot-train` flag, separated by `+`, for example `--policy.optimizer_lr=5e-5+--seed=7` |
 | `stage` | `train` | `prepare` stops before training; `probe_io` only tests the GPU and image copy speed |

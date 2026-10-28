@@ -7,7 +7,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="smolvla-so101",
-    version="0.6.2",
+    version="0.6.3",
     packages=find_packages(),
     install_requires=[
         "lerobot[smolvla] @ git+https://github.com/huggingface/lerobot@ff7cc3de1de830f5f3276918a013d04bdf9ea4be",

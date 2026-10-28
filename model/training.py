@@ -41,6 +41,7 @@ logger = logging.getLogger("smolvla_so101")
 
 # Fraction a sequence's measured frame rate may differ from the dataset median.
 FPS_TOLERANCE = 0.02
+FPS_MAX_OFF_FRACTION = 0.10  # more sequences off the rate than this means the rate itself is wrong
 LEROBOT_COMMIT = "ff7cc3de1de830f5f3276918a013d04bdf9ea4be"
 # Tried in order by --vcodec auto. Hardware first; then software H.264, much
 # faster to encode than AV1; then LeRobot's default.
@@ -496,7 +497,14 @@ def fold_gripper(args, export_dir: Path, progress: Progress) -> dict:
 
 # --- Measure the frame rate -----------------------------------------------------
 
-def measure_fps(binary: pd.DataFrame, clock_camera: str, progress: Progress) -> int:
+def measure_fps(binary: pd.DataFrame, clock_camera: str, progress: Progress) -> tuple[int, dict]:
+    """The dataset's frame rate, and the sequences too far off it to use.
+
+    A sequence more than FPS_TOLERANCE off the median is usually one whose clock
+    camera dropped frames; it is left out with a warning rather than failing the
+    job. If more than FPS_MAX_OFF_FRACTION are off, the recording rate itself is
+    inconsistent and the job stops.
+    """
     rates = {}
     for sid, b in binary[binary.component_name == clock_camera].groupby("sequence_id"):
         t = b.timestamp.sort_values().astype("int64").to_numpy() / 1e6
@@ -504,15 +512,28 @@ def measure_fps(binary: pd.DataFrame, clock_camera: str, progress: Progress) -> 
             rates[sid] = (len(t) - 1) / (t[-1] - t[0])
     median = statistics.median(rates.values())
     off = {s: r for s, r in rates.items() if abs(r - median) / median > FPS_TOLERANCE}
-    if off:
+    if len(off) > FPS_MAX_OFF_FRACTION * len(rates):
         raise SystemExit(
-            f"{len(off)} sequence(s) more than {FPS_TOLERANCE:.0%} off the median "
-            f"{median:.2f} fps, e.g. {next(iter(off))}: {next(iter(off.values())):.2f}"
+            f"{len(off)} of {len(rates)} sequences more than {FPS_TOLERANCE:.0%} off the median "
+            f"{median:.2f} fps, e.g. {next(iter(off))}: {next(iter(off.values())):.2f}; "
+            "record every sequence at the same rate"
         )
+    for sid, rate in off.items():
+        logger.warning(kv(event="skipped", sequence=sid, reason=f"{rate:.2f}_fps_against_median_{median:.2f}"))
+    kept = [r for s, r in rates.items() if s not in off]
     fps = round(median)
-    progress.set(fps_median=f"{median:.2f}", fps_min=f"{min(rates.values()):.2f}",
-                 fps_max=f"{max(rates.values()):.2f}", sequences=len(rates), fps=fps)
-    return fps
+    progress.set(fps_median=f"{median:.2f}", fps_min=f"{min(kept):.2f}",
+                 fps_max=f"{max(kept):.2f}", sequences=len(rates), fps=fps, skipped_fps=len(off))
+    return fps, off
+
+
+def drop_sequences(export_dir: Path, sequence_ids) -> None:
+    """Remove sequences from the export so the converter never sees them."""
+    if not sequence_ids:
+        return
+    path = export_dir / "sequences.parquet"
+    sequences = pd.read_parquet(path)
+    sequences[~sequences["sequence_id"].isin(set(sequence_ids))].to_parquet(path, index=False)
 
 
 # --- Pick a video codec that actually works here -----------------------------------
@@ -748,13 +769,14 @@ def main(argv: list[str] | None = None) -> int:
         with progress.run("fold_gripper"):
             fold = fold_gripper(args, export_dir, progress)
         with progress.run("measure_fps"):
-            fps = measure_fps(binary, args.cameras.split()[0], progress)
+            fps, off_rate = measure_fps(binary, args.cameras.split()[0], progress)
+            drop_sequences(export_dir, off_rate)
         with progress.run("choose_vcodec"):
             vcodec = choose_vcodec(args.vcodec, progress)
         with progress.run("convert"):
             summary = convert(args, export_dir, dataset_root, repo_id, fps, vcodec, progress)
         with progress.run("check_dataset"):
-            n_sequences = len(pd.read_parquet(args.sequences_file))
+            n_sequences = len(pd.read_parquet(export_dir / "sequences.parquet"))
             report = check_dataset(args, dataset_root, repo_id, fps, n_sequences,
                                    fold["state_dim"], len(summary.skipped), progress)
         provenance = {
@@ -763,7 +785,8 @@ def main(argv: list[str] | None = None) -> int:
                         "closed_value": args.gripper_closed, "encoding": "0 = open, 1 = closed"},
             "clamp_joint": args.clamp_joint or None,
             "vcodec": vcodec,
-            "skipped_sequences": [list(s) for s in summary.skipped],
+            "skipped_sequences": [list(s) for s in summary.skipped]
+                                 + [[sid, f"{rate:.2f} fps, off the median"] for sid, rate in off_rate.items()],
             "fold": fold,
             "lerobot_commit": LEROBOT_COMMIT,
             "training": {k: getattr(args, k) for k in (

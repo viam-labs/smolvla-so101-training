@@ -35,7 +35,10 @@ that rate, so it is also the rate its controller needs to use.
 2. **Joins the gripper to the arm.** Each arm reading is matched with the
    nearest gripper reading, within 0.05 s. The gripper value is scaled to
    0 = open, 1 = closed, and added as a sixth joint.
-3. **Checks the capture rate** is the same in every sequence.
+3. **Checks the capture rate** is the same in every sequence. A sequence more
+   than 2% off the median, usually one whose first camera dropped frames, is
+   left out with a warning and listed in `viam_training.json`; if more than 10%
+   are off, the job stops, because the recording rate itself is inconsistent.
 4. **Converts to a LeRobot dataset** with
    [`viam-sequence-to-lerobot`](https://github.com/viam-labs/viam-sequence-to-lerobot).
    The action is the next position, one episode is made per sequence, and the
@@ -60,7 +63,7 @@ training container. Built on `huggingface/lerobot-gpu`, it pins LeRobot to the
 commit that `viam-labs:vla` 0.2.1 loads checkpoints with.
 
 ```bash
-viam train submit custom from-registry --dataset-id=<dataset id> --org-id=<org id> --model-name=<model name> --model-version=<new version> --script-name=<script org id>:smolvla-so101 --version=0.6.2 --container-id=<container id> --args=steps=7500
+viam train submit custom from-registry --dataset-id=<dataset id> --org-id=<org id> --model-name=<model name> --model-version=<new version> --script-name=<script org id>:smolvla-so101 --version=0.6.3 --container-id=<container id> --args=steps=7500
 ```
 
 ```bash

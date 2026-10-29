@@ -1,7 +1,8 @@
-"""SmolVLA training script for SO-101 sequence datasets (T1).
+"""SmolVLA training script for SO-101 sequence datasets.
 
-Runs as a Viam custom training job in the T2 container, which already has
-every dependency below installed at these exact versions.
+Runs as a Viam custom training job in the "LeRobot SmolVLA for SO-101"
+training container, which already has every dependency below installed at
+these exact versions.
 """
 from setuptools import find_packages, setup
 

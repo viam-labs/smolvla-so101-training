@@ -3,22 +3,27 @@
 A Viam custom training script that fine-tunes
 [SmolVLA](https://huggingface.co/lerobot/smolvla_base) on demonstrations
 recorded from an SO-101 arm, and produces a model that the
-`viam-labs:vla:policy` service can run.
-
-It is the training script for Viam's course **SO-101: Training a VLA Policy**.
-The course records demonstrations of a mug task, but the script works for any
-task recorded the same way.
+`viam-labs:vla:policy` service can run. It works for any task: the
+instruction for each demonstration comes from a tag, and the component names
+are arguments.
 
 ## What it trains on
 
 The script takes a Viam **sequence dataset**: recordings made with
 `viam:capture-control`, one sequence per demonstration. Each sequence needs:
 
-- **The follower arm's `JointPositions`**, five joints, in degrees.
+- **The arm's `JointPositions`**, in degrees. The model's state is the arm's
+  joints, plus one for the gripper if there is one.
 - **The gripper's `DoCommand`**, captured with
-  `{"docommand_input": {"get": true}}`.
-- **Two cameras' `GetImages`**. By default they are named `overhead-camera`
-  and `wrist-camera`.
+  `{"docommand_input": {"get": true}}`. The response needs a numeric
+  `position`; set `gripper_open` and `gripper_closed` to its value at each end.
+  To train without a gripper, pass `gripper=` empty.
+- **Each camera's `GetImages`**. The defaults are an overhead camera and a
+  wrist camera.
+
+The component names default to `follower-arm`, `follower-gripper`,
+`overhead-camera` and `wrist-camera`. If yours differ, pass `arm`, `gripper`
+and `cameras` (see [Arguments](#arguments)).
 - **A tag holding the instruction**: `cmd:`, for example
   `cmd:push the mug to the blue square`, or `task:`, which is what the
   [capture-control web app](https://github.com/viam-labs/capture-control-webapp)
@@ -34,7 +39,7 @@ that rate, so it is also the rate its controller needs to use.
    them through the job's `/gcs` mount.
 2. **Joins the gripper to the arm.** Each arm reading is matched with the
    nearest gripper reading, within 0.05 s. The gripper value is scaled to
-   0 = open, 1 = closed, and added as a sixth joint.
+   0 = open, 1 = closed, and added after the arm's joints.
 3. **Checks the capture rate** is the same in every sequence. A sequence more
    than 2% off the median, usually one whose first camera dropped frames, is
    left out with a warning and listed in `viam_training.json`; if more than 10%
@@ -44,8 +49,8 @@ that rate, so it is also the rate its controller needs to use.
    The action is the next position, one episode is made per sequence, and the
    instruction comes from the `cmd:` tag, or the `task:` tag if there is no
    `cmd:` one.
-5. **Checks the dataset**: state and action are six values, both cameras are
-   present, and the frame rate and episode count are right.
+5. **Checks the dataset**: state and action have one value per joint, every
+   camera is present, and the frame rate and episode count are right.
 6. **Fine-tunes `lerobot/smolvla_base`** with `lerobot-train`. The job stops
    if PyTorch cannot use a GPU.
 7. **Writes the model**. This is the checkpoint, plus `viam_training.json` and
@@ -56,14 +61,22 @@ line every minute says which stage is running, so a quiet log means a stall.
 
 ## Running it
 
-The script runs in a training container that already has LeRobot, the
-converter and the base models installed. That is
-`docker.io/js6450/so101-smolvla:0.4`, registered with Viam as a custom
-training container. Built on `huggingface/lerobot-gpu`, it pins LeRobot to the
-commit that `viam-labs:vla` 0.2.1 loads checkpoints with.
+The script is `smolvla-so101` in the Viam registry. Run it in the public
+training container **LeRobot SmolVLA for SO-101 (0.1: NVIDIA driver env)**.
+The container already has LeRobot, the converter and the base models
+installed. It is built on `huggingface/lerobot-gpu` and pins LeRobot to the
+commit that `viam-labs:vla` 0.2.1 loads checkpoints with, so a model you
+train with it can be deployed.
+
+In the Viam app, train a model on your sequence dataset with **Custom**
+training: choose `smolvla-so101` as the script and that container from the
+container list, then add any [arguments](#arguments).
+
+With the CLI (version 1.12.0 or later), find the container's ID with
+`viam train containers list --org-id=<org id>`, then submit:
 
 ```bash
-viam train submit custom from-registry --dataset-id=<dataset id> --org-id=<org id> --model-name=<model name> --model-version=<new version> --script-name=<script org id>:smolvla-so101 --version=0.6.3 --container-id=<container id> --args=steps=7500
+viam train submit custom from-registry --dataset-id=<dataset id> --org-id=<org id> --model-name=<model name> --model-version=<new version> --script-name=<namespace>:smolvla-so101 --version=<script version> --container-id=<container id> --args=steps=7500
 ```
 
 ```bash
@@ -100,8 +113,10 @@ The training defaults follow `viam-sequence-to-lerobot`'s
 
 ## Running it locally
 
-`--device mps` or `--device cpu` runs it on a sequence dataset exported with
-`viam dataset export`:
+Install it with `pip install .`, which installs LeRobot and the converter at
+the pinned commits (the container uses Python 3.12), and have `ffmpeg` on your
+`PATH`. `--device mps` or `--device cpu` then runs it on a sequence dataset
+exported with `viam dataset export`:
 
 ```bash
 python -m model.training --binary_data_file=<dir>/binary_data.parquet --tabular_data_file=<dir>/tabular_data.parquet --sequences_file=<dir>/sequences.parquet --model_output_directory=<out> --device=mps --steps=200

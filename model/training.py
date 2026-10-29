@@ -1,4 +1,4 @@
-"""SmolVLA training script for Viam custom training (T1).
+"""SmolVLA training script for Viam custom training.
 
 Takes a Viam sequence dataset of SO-101 demonstrations and produces a SmolVLA
 checkpoint that ``viam-labs:vla:policy`` can load.
